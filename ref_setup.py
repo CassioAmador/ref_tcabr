@@ -6,7 +6,6 @@ import threading
 import time
 import Pmw
 import sqlite3
-import ssh
 from os import getcwd,popen,system,environ,write,path
 from sys import argv
 
@@ -21,9 +20,9 @@ import numpy as np
 lugar='/home/GRS/TCABR'
 
 #if HTO is not ON, put tty=0, for test purposes.
-tty=0
+tty=1
 #if Function Generator is OFF, agilent=0.
-agilent=0
+agilent=1
 
 #THREADING TO MAKE CHILD TIME COUNTER
 class backgroundTask(threading.Thread):
@@ -271,6 +270,7 @@ class Refsetup:
 
     def setsetup(self):
         self.check_values()
+        self.angle=self.value('angle')
         if self.mode=='sf':
             self.sweep=self.value('sweep')
             self.f_start=self.value('freq_start')
@@ -285,6 +285,7 @@ class Refsetup:
                 self.HTO_prog.ff_prog(self.f_start)
             self.nchannels=7
         elif self.mode=='hf':
+            self.time_step = self.value('time_step')
             if tty==1:
                 self.HTO_prog.hf_prog(self.freqs,self.value('restart_table'))
             self.nchannels=15
@@ -402,68 +403,67 @@ class Refsetup:
             dim.setUnits("ms")
             signal = MDSplus.Signal(data, None, dim)
             node.putData(signal)
-            if self.mode!='ff':
-                channel = 3
-                node = tree.getNode("\\%s.physicalch" % node_name[channel] )
-                node.putData(MDSplus.Int8(channel))
-                node = tree.getNode("\\%s.signal" % node_name[channel] )
-                data = MDSplus.Int16Array(np.fromfile("bindata_%i.bin" %(channel+1),dtype=np.int16))
-                data.setUnits("Counts")
-                dim = MDSplus.Range(0, (data.data().size-1)*1e-3/self.value('rate') , 1e-3/self.value('rate'))
-                dim.setUnits("ms")
-                signal = MDSplus.Signal(data, None, dim)
-                node.putData(signal)
+        if self.mode!='ff':
+            channel = 3
+            node = tree.getNode("\\%s.physicalch" % node_name[channel] )
+            node.putData(MDSplus.Int8(channel))
+            node = tree.getNode("\\%s.signal" % node_name[channel] )
+            data = MDSplus.Int16Array(np.fromfile("bindata_%i.bin" %(channel+1),dtype=np.int16))
+            data.setUnits("Counts")
+            dim = MDSplus.Range(0, (data.data().size-1)*1e-3/self.value('rate') , 1e-3/self.value('rate'))
+            dim.setUnits("ms")
+            signal = MDSplus.Signal(data, None, dim)
+            node.putData(signal)
         #Populate parameter node
         #Commons parameters
-        node = tree.getNode("\\ref_parameter.angle" )
-        angle = self.value('angle')
-        angle.setUnits("degrees")
-        node.putData(self.value('angle'))
+        node = tree.getNode("\\ref_parameter.samples")
+        node.putData(MDSplus.Int32(data.data().size))
         node = tree.getNode("\\ref_parameter.rate")
         rate = MDSplus.Float32(1e6*self.value('rate'))
         rate.setUnits("Hz")
         node.putData(rate)
-        node = tree.getNode("\\ref_parameter.samples")
-        node.putData(MDSplus.Int32(data.data().size))
+        node = tree.getNode("\\ref_parameter.angle" )
+        angle = MDSplus.Float32(self.value('angle'))
+        angle.setUnits("degrees")
+        node.putData(self.angle)
         #Mode dependent parameters
+        node = tree.getNode("\\ref_parameter.refmode")
+        node.putData(self.mode)
         if self.mode=='ff':
-            node = tree.getNode("\\fixed_freq.enabled")
-            node.putData(True)
-            node = tree.getNode("\\hopping_freq.enabled")
-            node.putData(False)
-            node = tree.getNode("\\sweep_freq.enabled")
-            node.putData(False)
-            #specific parameters
-            node = tree.getNode("\\fixed_freq.frequency")
-            node.putData(self.f_start)
+            node = tree.getNode("\\fixedfreq.frequency")
+            freq = MDSplus.Float32(self.f_start)
+            freq.setUnits("GHz")
+            node.putData(freq)
         elif self.mode=='hf':
-            node = tree.getNode("\\fixed_freq.enabled")
-            node.putData(False)
-            node = tree.getNode("\\hopping_freq.enabled")
-            node.putData(True)
-            node = tree.getNode("\\sweep_freq.enabled")
-            node.putData(False)
-            #specific parameters
             node = tree.getNode("\\hopping_freq.freq_table")
-            node.putData(self.freqs)
-            node = tree.getNode("\\hopping_freq.restart_time")
-            node.putData(self.value('restart_table'))
-            node = tree.getNode("\\hopping_freq.time_step")
-            node.putData(self.value('time_step'))
+            freq_table = MDSplus.Float32(np.array(self.freqs))
+            freq_table.setUnits("GHz")
+            node.putData(freq_table)
+            node = tree.getNode("\\hoppingfreq.restart_time")
+            restart_table = MDSplus.Float32(self.value('restart_table'))
+            restart_table.setUnits("ms")
+            node.putData(restart_table)
+            node = tree.getNode("\\hoppingfreq.time_step")
+            time_step = MDSplus.Float32(self.time_step)
+            time_step.setUnits("µs")
+            node.putData(time_step)
         elif self.mode=='sf':
-            node = tree.getNode("\\fixed_freq.enabled")
-            node.putData(False)
-            node = tree.getNode("\\hopping_freq.enabled")
-            node.putData(False)
-            node = tree.getNode("\\sweep_freq.enabled")
-            node.putData(True)
-            #specific parameters
-            node = tree.getNode("\\sweep_freq.freq_start")
-            node.putData(self.freq_start)
-            node = tree.getNode("\\sweep_freq.freq_end")
-            node.putData(self.freq_end)
-            node = tree.getNode("\\sweep_freq.sweep_time")
-            node.putData(self.interv_sweep)
+            node = tree.getNode("\\sweepfreq.freq_start")
+            freq_start = MDSplus.Float32(self.f_start)
+            freq_start.setUnits("GHz")
+            node.putData(freq_start)
+            node = tree.getNode("\\sweepfreq.freq_end")
+            freq_end = MDSplus.Float32(self.f_end)
+            freq_end.setUnits("GHz")
+            node.putData(freq_end)
+            node = tree.getNode("\\sweepfreq.sweep_time")
+            sweep_time = MDSplus.Float32(self.sweep)
+            sweep_time.setUnits("µs")
+            node.putData(sweep_time)
+            node = tree.getNode("\\sweepfreq.interv_sweep")
+            interv_sweep = MDSplus.Float32(self.interv_sweep)
+            interv_sweep.setUnits("µs")
+            node.putData(interv_sweep)
 
     def check_values(self):
         sweep_min=8
