@@ -6,76 +6,88 @@ import threading
 import time
 import Pmw
 import sqlite3
-from os import getcwd,popen,system,environ,write,path
+import socket
+from os import getcwd,popen,system,environ,write,path,getpid
 from sys import argv
 
 import last_shot as ls
 import ttyS0comm
 import agilentcomm
-import check_ref
 import ref_acq
-import MDSplus
-import numpy as np
+import MDSTree
+import SimpleConfigParser
 
-lugar='/home/GRS/TCABR'
+ref_folder='/home/GRS/TCABR'
 
-#if HTO is not ON, put tty=0, for test purposes.
-tty=1
-#if Function Generator is OFF, agilent=0.
-agilent=1
+#Import the configuration parameters from "oper_config.ini"
+#They are called inside each class, at the beginning
+cp = SimpleConfigParser.SimpleConfigParser()
+cp.read('%s/oper_config.ini' % ref_folder)
 
 #THREADING TO MAKE CHILD TIME COUNTER
 class backgroundTask(threading.Thread):
-    def __init__(self,pai):
+    def __init__(self,father_class):
         threading.Thread.__init__(self)
-        self.pai=pai
+        self.father_class=father_class
         self.setDaemon(True)
         self.start()
 
     def run(self):
-        self.pai.st.appendtext('\n\t')
+        self.father_class.st.appendtext('\n\t')
         for i in ('...'):
-            self.pai.st.appendtext('\t%s' % i)
+            self.father_class.st.appendtext('\t%s' % i)
             time.sleep(0.2)
-        self.pai.root.destroy()
+        print ""
+        self.father_class.root.destroy()
 
 class acquisitonTask(threading.Thread):
-    def __init__(self,father,command):
+    def __init__(self,father_class,command):
         threading.Thread.__init__(self)
         self.com=command
-        self.father=father
+        self.father_class=father_class
         self.setDaemon(True)
         self.start()
     def run(self):
         #returns True if acquisition was successfull
         b=ref_acq.ref_acq(self.com)
         if b:
-            self.father.savesetup()
+            self.father_class.savesetup()
+
+class mdstreeTask(threading.Thread):
+    def __init__(self,father_class):
+        threading.Thread.__init__(self)
+        self.father_class=father_class
+        self.setDaemon(True)
+        self.start()
+        self.join(360)
+    def run(self):
+        #It calls the following parameters: tipo,shot,value,mode,f_start,freqs,time_step,f_end,sweep,interv_sweep
+        MDSTree.populate_MDSTree(self.father_class)
 
 class Refsetup:
     def __init__(self,root,database,tipo='data'):
-        global agilent,tty
-#        if tipo=="kill":
-#            find_proc()
-#            check_ref.kill()
-#            exit()
-#        if check_ref.check_ref():
-#            check_ref.lock_ref()
+        self.tty=int(cp.getoption('tty'))
+        self.func_gen=int(cp.getoption('func_gen'))
+        self.tty_read=int(cp.getoption('tty_read'))
+        self.freq_min=float(cp.getoption('freq_min'))
+        self.freq_max=float(cp.getoption('freq_max'))
+        self.sweep_min=int(cp.getoption('sweep_min'))
         self.root=root
         self.root.protocol('WM_DELETE_WINDOW', self.close)
-        self.plls={50:11,62.5:9,100:7,200:1}
+#        self.plls={50:11,62.5:9,100:7,200:1}
+        self.plls={50:11,62:9,100:7,125:3,200:1} # actually 62.5:9 MHz
         self.database=database
         self.tipo=tipo
         self.oper=0
         if not path.exists("/dev/pcie0"):
             system("sudo /home/GRS/driver_ATCA/driver/mknod.sh")
             system("sleep 1")
-        if tty==1:
-            self.HTO_prog=ttyS0comm.HTO_prog()
-        if agilent==1:
+        if self.tty==1:
+            self.HTO_prog=ttyS0comm.HTO_prog(self.tty_read)
+        if self.func_gen==1:
             self.agilent=agilentcomm.Agilent_prog()
             if not self.agilent.check:
-                agilent=0
+                self.func_gen=0
         self.choose()
 
     def choose(self):
@@ -107,7 +119,7 @@ class Refsetup:
             self.infobox(70)
         self.st.appendtext('Olá Banzai\n\n')
         self.st.appendtext('Operando em modo: "%s"\n' % self.tipo)
-        if tty==1:
+        if self.tty==1:
             self.HTO_prog.st=self.st  
         else:
             self.st.appendtext('sem comunicação com Reflectômetro')
@@ -142,7 +154,7 @@ class Refsetup:
         else:
             self.entries_default.append(0.5)
 
-        if tty==1:
+        if self.tty==1:
             self.HTO_prog.mode=self.mode
         self.number_entries=len(self.keys_entries)
         self.entries={}
@@ -157,7 +169,7 @@ class Refsetup:
             self.makeradio(self.keys_radio[e],self.radio_caption[e],self.radio_default[e],self.radio_objects[e])
 
         self.shotLabel()
-
+        self.set_previous_config()
         self.buttons()
         
     def sf(self):
@@ -166,7 +178,7 @@ class Refsetup:
                             'Freq Start (8.2-13.4 GHz):',
                             'Freq End (8.2-13.4 GHz):',
                             'Angle (grad):','Start Time (ms)\n(0=Ôhmico):']
-        self.entries_default=['8','7','8.2','13.4','5','0']
+        self.entries_default=['50','7','8.2','13.4','5','0']
         self.keys_entries=['sweep','interv_sweep',
                             'freq_start','freq_end',
                             'angle','start_time']
@@ -182,7 +194,7 @@ class Refsetup:
                               'Step Time (%ss):' % u'\u03bc',
                               'Restart Table (ms):','Angle (grad)',
                               'Start Time (ms)\n(0=Ôhmico):']
-        self.entries_default=['8.2,12,9,10,11','5000','200','5','0']
+        self.entries_default=['8.2,8.6,9,10,11','200','200','5','0']
         self.keys_entries=['freq_table','time_step',
                            'restart_table','angle','start_time']
 
@@ -220,7 +232,7 @@ class Refsetup:
         self.buttonBox.pack(fill = 'x', expand = 1, padx = 3, pady = 3)
 
         # Add buttons to the ButtonBox.
-        self.buttonBox.add('Default', command = self.default)
+        self.buttonBox.add('Default', command = self.set_default)
         self.buttonBox.add('Close', command = self.close)
         self.buttonBox.add('Stop Acq', command = find_proc)
         self.buttonBox.add('Set', command = Pmw.busycallback(self.setsetup))
@@ -249,7 +261,6 @@ class Refsetup:
         self.shotframe=tk.Frame(self.root)
         self.shotframe.pack()
 
-
     def value(self,key):
         if key in self.entries.keys():
             try:
@@ -276,17 +287,17 @@ class Refsetup:
             self.f_start=self.value('freq_start')
             self.f_end=self.value('freq_end')
             self.interv_sweep=self.value('interv_sweep')
-            if tty==1:
+            if self.tty==1:
                 self.HTO_prog.sf_prog(self.f_start,self.f_end,self.sweep)
             self.nchannels=15
         elif self.mode=='ff':
             self.f_start=self.value('freq_start')
-            if tty==1:
+            if self.tty==1:
                 self.HTO_prog.ff_prog(self.f_start)
             self.nchannels=7
         elif self.mode=='hf':
             self.time_step = self.value('time_step')
-            if tty==1:
+            if self.tty==1:
                 self.HTO_prog.hf_prog(self.freqs,self.value('restart_table'))
             self.nchannels=15
         pll=self.plls[int(self.value('rate'))]
@@ -300,7 +311,7 @@ class Refsetup:
             nsamples=4096
             self.dur=self.value('time_dur')
         nsamples=self.dur*1000*self.value('rate')
-        commandline='%s/ref_acq ack nsamples %d file bindata channel %d pll %s' % (lugar,nsamples,self.nchannels,pll)
+        commandline='%s/ref_acq ack nsamples %d file bindata channel %d pll %s' % (ref_folder,nsamples,self.nchannels,pll)
         self.st.appendtext('\n\nDensity probing:')
         if self.mode=='sf':
             self.st.appendtext('\n K: %g - %g (10^13)\n Ka: %g - %g (10^13)\n\n' % (f2ne(self.f_start*2),f2ne(self.f_end*2),f2ne(self.f_start*3),f2ne(self.f_end*3)))
@@ -313,7 +324,7 @@ class Refsetup:
         #self.st.appendtext('\nCommand: %s\n\n' % (commandline))
         print '\nCommand: %s\n' % commandline
         find_proc()
-        if agilent==1:
+        if self.func_gen==1:
             if self.mode=="ff":
                 self.agilent.prog("ff",self.dur)
             elif self.mode=="sf":
@@ -362,10 +373,7 @@ class Refsetup:
             cursor.execute('INSERT INTO hf VALUES (:date, :shot, :freq_table, :time_step, :restart_table, :angle, :rate, :start_time)', ndata)
         connection.commit()
         connection.close()
-        try:
-            self.populate_MDSTree()
-        except:
-            pass
+        mdstreeTask(self)
         self.create_info_file(data)
         ref_acq.pos_acq(self.tipo)
         self.st.appendtext('\nShot %s done!\n\n' % self.shot)
@@ -375,7 +383,7 @@ class Refsetup:
             self.setsetup()
 
     def create_info_file(self,data):
-        arq=open('%s/%s/%s_info.dat' % (lugar,self.tipo,self.shot),'w')
+        arq=open('%s/%s/%s_info.dat' % (ref_folder,self.tipo,self.shot),'w')
         arq.write('%s\n' % self.mode)
         arq.write('%s\n' % self.today)
         for e in self.keys_entries[:-1]:
@@ -384,92 +392,8 @@ class Refsetup:
         arq.write('time_dur: %s' % self.dur)
         arq.close()
 
-    def populate_MDSTree(self):
-        if self.tipo!="data":
-            return
-        node_name = ["banda_k", "banda_ka", "mirnov", "trigger"]
-        tree_name = "tcabr_ref"
-        tree = MDSplus.Tree(tree_name, -1)
-        tree.createPulse(self.shot)
-        tree = MDSplus.Tree(tree_name, self.shot)
-        #Populate signals node
-        for channel in range(3):
-            node = tree.getNode("\\%s.physicalch" % node_name[channel] )
-            node.putData(MDSplus.Int8(channel))
-            node = tree.getNode("\\%s.signal" % node_name[channel] )
-            data = MDSplus.Int16Array(np.fromfile("bindata_%i.bin" %(channel+1),dtype=np.int16))
-            data.setUnits("Counts")
-            dim = MDSplus.Range(0, (data.data().size-1)*1e-3/self.value('rate'), 1e-3/self.value('rate'))
-            dim.setUnits("ms")
-            signal = MDSplus.Signal(data, None, dim)
-            node.putData(signal)
-        if self.mode!='ff':
-            channel = 3
-            node = tree.getNode("\\%s.physicalch" % node_name[channel] )
-            node.putData(MDSplus.Int8(channel))
-            node = tree.getNode("\\%s.signal" % node_name[channel] )
-            data = MDSplus.Int16Array(np.fromfile("bindata_%i.bin" %(channel+1),dtype=np.int16))
-            data.setUnits("Counts")
-            dim = MDSplus.Range(0, (data.data().size-1)*1e-3/self.value('rate') , 1e-3/self.value('rate'))
-            dim.setUnits("ms")
-            signal = MDSplus.Signal(data, None, dim)
-            node.putData(signal)
-        #Populate parameter node
-        #Commons parameters
-        node = tree.getNode("\\ref_parameter.samples")
-        node.putData(MDSplus.Int32(data.data().size))
-        node = tree.getNode("\\ref_parameter.rate")
-        rate = MDSplus.Float32(1e6*self.value('rate'))
-        rate.setUnits("Hz")
-        node.putData(rate)
-        node = tree.getNode("\\ref_parameter.angle" )
-        angle = MDSplus.Float32(self.value('angle'))
-        angle.setUnits("degrees")
-        node.putData(self.angle)
-        #Mode dependent parameters
-        node = tree.getNode("\\ref_parameter.refmode")
-        node.putData(self.mode)
-        if self.mode=='ff':
-            node = tree.getNode("\\fixedfreq.frequency")
-            freq = MDSplus.Float32(self.f_start)
-            freq.setUnits("GHz")
-            node.putData(freq)
-        elif self.mode=='hf':
-            node = tree.getNode("\\hopping_freq.freq_table")
-            freq_table = MDSplus.Float32(np.array(self.freqs))
-            freq_table.setUnits("GHz")
-            node.putData(freq_table)
-            node = tree.getNode("\\hoppingfreq.restart_time")
-            restart_table = MDSplus.Float32(self.value('restart_table'))
-            restart_table.setUnits("ms")
-            node.putData(restart_table)
-            node = tree.getNode("\\hoppingfreq.time_step")
-            time_step = MDSplus.Float32(self.time_step)
-            time_step.setUnits("µs")
-            node.putData(time_step)
-        elif self.mode=='sf':
-            node = tree.getNode("\\sweepfreq.freq_start")
-            freq_start = MDSplus.Float32(self.f_start)
-            freq_start.setUnits("GHz")
-            node.putData(freq_start)
-            node = tree.getNode("\\sweepfreq.freq_end")
-            freq_end = MDSplus.Float32(self.f_end)
-            freq_end.setUnits("GHz")
-            node.putData(freq_end)
-            node = tree.getNode("\\sweepfreq.sweep_time")
-            sweep_time = MDSplus.Float32(self.sweep)
-            sweep_time.setUnits("µs")
-            node.putData(sweep_time)
-            node = tree.getNode("\\sweepfreq.interv_sweep")
-            interv_sweep = MDSplus.Float32(self.interv_sweep)
-            interv_sweep.setUnits("µs")
-            node.putData(interv_sweep)
-
     def check_values(self):
-        sweep_min=8
         interv_sweep_min=150
-        freq_min=8.2
-        freq_max=13.4
         if self.mode=='hf':
             self.freqs=self.value('freq_table')
             if type(self.freqs)==type(8.):
@@ -479,36 +403,56 @@ class Refsetup:
             if self.value('time_step')<interv_sweep_min:
                 self.entries['time_step'].setvalue(interv_sweep_min)
         else:
-            if self.value('freq_start')<freq_min:
-                self.entries['freq_start'].setvalue(freq_min)
-                self.st.appendtext('minimum frequency: %s GHz\n' % freq_min)
-            if self.value('freq_start')>freq_max:
-                self.entries['freq_start'].setvalue(freq_max)
-                self.st.appendtext('maximum frequency: %s GHz\n' % freq_max)
+            if self.value('freq_start')<self.freq_min:
+                self.entries['freq_start'].setvalue(self.freq_min)
+                self.st.appendtext('minimum frequency: %s GHz\n' % self.freq_min)
+            if self.value('freq_start')>self.freq_max:
+                self.entries['freq_start'].setvalue(self.freq_max)
+                self.st.appendtext('maximum frequency: %s GHz\n' % self.freq_max)
             if self.mode=='sf':
-                if self.value('sweep')<sweep_min:
-                    self.entries['sweep'].setvalue(sweep_min)
-                    self.st.appendtext('sweep period from %s microseconds to 100 ms\n' % (sweep_min))
+                if self.value('sweep')<self.sweep_min:
+                    self.entries['sweep'].setvalue(self.sweep_min)
+                    self.st.appendtext('sweep period from %s microseconds to 100 ms\n' % (self.sweep_min))
                 if self.value('freq_start')>self.value('freq_end'):
-                    self.entries['freq_start'].setvalue(freq_min)
-                    self.entries['freq_end'].setvalue(freq_max)
+                    self.entries['freq_start'].setvalue(self.freq_min)
+                    self.entries['freq_end'].setvalue(self.freq_max)
                     self.st.appendtext('initial freq cannot be greater than last freq\n')
-                if self.value('freq_end')<freq_min:
-                    self.entries['freq_end'].setvalue(freq_min)
-                    self.st.appendtext('minimum frequency: %s GHz\n' % freq_min)
-                if self.value('freq_end')>freq_max:
-                    self.entries['freq_end'].setvalue(freq_max)
-                    self.st.appendtext('maximum frequency: %s GHz\n' % freq_max)
+                if self.value('freq_end')<self.freq_min:
+                    self.entries['freq_end'].setvalue(self.freq_min)
+                    self.st.appendtext('minimum frequency: %s GHz\n' % self.freq_min)
+                if self.value('freq_end')>self.freq_max:
+                    self.entries['freq_end'].setvalue(self.freq_max)
+                    self.st.appendtext('maximum frequency: %s GHz\n' % self.freq_max)
 
-    def default(self):
+    def set_default(self):
         for e in range(self.number_entries):
             self.entries[self.keys_entries[e]].setvalue(self.entries_default[e])
         for e in range(self.number_radio):
             self.radio[self.keys_radio[e]].invoke(self.radio_default[e])
 
+    def set_previous_config(self):
+        connection=sqlite3.connect(self.database)
+        cursor=connection.cursor()
+        cursor.execute('SELECT * FROM %s ORDER BY shot' % self.mode)
+        col_name_list = [tuple[0] for tuple in cursor.description]
+        previous_config=cursor.fetchall()[-1]
+        connection.close()
+        for e in range(len(col_name_list)):
+            param_name=col_name_list[e]
+            param_config=previous_config[e]
+            if param_name in self.keys_entries:
+                self.entries[param_name].setvalue(param_config)
+            if param_name in self.keys_radio:
+                #print param_name,param_config,self.radio_objects,self.radio_objects[0]
+                para=str(param_config)
+                if '.0' in para:
+                    para=para[:-2]
+                param_index=self.radio_objects[0].index(para)
+                self.radio[param_name].invoke(param_index)
+
     def close(self):
         if self.oper==1:
-            self.st.exportfile('%s/logs/ref_%s_mode_%s.log' % (lugar,self.mode,time.strftime("%X_%B_%d_%Y")))
+            self.st.exportfile('%s/logs/ref_%s_mode_%s.log' % (ref_folder,self.mode,time.strftime("%X_%B_%d_%Y")))
             self.st.clear()
             self.oper=0
             self.buttonBox.destroy()
@@ -522,17 +466,18 @@ class Refsetup:
             self.st.appendtext("Tchau, Banzai!")
             bg=backgroundTask(self)
             find_proc()
-            check_ref.free_ref()
-            if tty==1:
+            if self.tty==1:
                 self.HTO_prog.close()
-            if agilent==1:
+            if self.func_gen==1:
                 self.agilent.turn_off()
+            except:
+                pass
 
     def about_gui(self):
-        Pmw.aboutversion('0.9\n Jan 30 2013')
+        Pmw.aboutversion('0.95\n Mar 16 2014')
         Pmw.aboutcopyright('Author: Cassio H. S. Amador')
         Pmw.aboutcontact(
-            'For more information/bug reporting:\n' +
+            'For more informations/bug reporting:\n' +
             '  email: cassioamador@yahoo.com.br'
         )
         self.about = Pmw.AboutDialog(self.root, applicationname = 'Ref Setup')
@@ -559,14 +504,14 @@ def f2ne(f):
     return ne
 
 if __name__=='__main__':
-    database='%s/ref.db' % lugar
+    database='%s/ref.db' % ref_folder
     tipo='data'
     if len(argv)>=2:
         if argv[1]=='mirror':
-            database='%s/ref_test.db' % lugar
+            database='%s/ref_test.db' % ref_folder
             tipo='mirror'
         elif argv[1]=='clean':
-            database='%s/ref_clean.db' % lugar
+            database='%s/ref_clean.db' % ref_folder
             tipo='cleaning_plasma'
         elif argv[1]=='kill':
             tipo='kill'

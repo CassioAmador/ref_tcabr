@@ -3,10 +3,11 @@ import serial,time
 from os import popen,system
 
 class HTO_com:
-    def __init__(self):
+    def __init__(self,tty_read=1):
         #TIMEOUT OF 1 SECOND, SO IT CAN READ BACK, AND XONXOFF SO IT WAITS FOR MESSAGE.
         #This command opens port with port='/dev/ttyS0', baudrate=9600, bytesize=8, parity='N', stopbits=1, timeout=1, xonxoff=1, rtscts=0, dsrdtr=0
         self.ser=serial.Serial(port='/dev/ttyS0',xonxoff=1,timeout=1)
+        self.tty_read=tty_read
     
     def send(self,com,multiple=0):
         if multiple==0:
@@ -16,7 +17,8 @@ class HTO_com:
         if com=='mode sweep':
             time.sleep(3)
         out=self.ser.readlines()
-        print out
+        if self.tty_read==1:
+            print out
         out = out[1]
         return out.split('\r\n')[0]
 
@@ -28,13 +30,13 @@ class HTO_com:
         self.ser.close()
 
 class HTO_prog:
-    def __init__(self):
+    def __init__(self,tty_read=1):
         a=popen('ls -al /dev/ttyS0').readlines()
         comp='rw'
         if a[0][6:8]!=comp:
             system('sudo chmod o+rw /dev/ttyS0')
         try:
-            self.HTO=HTO_com()
+            self.HTO=HTO_com(tty_read)
             self.HTO.send('$8')
         except IndexError:
             self.error_message('   LIGUE','    AQUI')

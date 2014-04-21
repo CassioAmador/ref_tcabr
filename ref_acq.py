@@ -30,9 +30,8 @@ def pos_acq(tipo):
     if tipo=='data':
         print "Starting data transfer to SAUSAGE"
         try:
-            system('rsync -auv -e ssh /TCABRdata/MDSplusTreeTCABRRef/tcabr_ref_%s.characteristics root@sausage.if.usp.br:/TCABRdata/MDSplusTreeTCABRRef/' % (shot))
-            system('rsync -auv -e ssh /TCABRdata/MDSplusTreeTCABRRef/tcabr_ref_%s.datafile root@sausage.if.usp.br:/TCABRdata/MDSplusTreeTCABRRef/' % (shot))
-            system('rsync -auv -e ssh /TCABRdata/MDSplusTreeTCABRRef/tcabr_ref_%s.tree root@sausage.if.usp.br:/TCABRdata/MDSplusTreeTCABRRef/' % (shot))
+            system('rsync -auv -e ssh /TCABRdata/MDSplusTreeTCABRRef/tcabr_ref_%s* daqref@sausage.if.usp.br:/TCABRdata/MDSplusTreeTCABRRef/' % (shot))
+            system('rsync -auv -e ssh /TCABRdata/MDSplusTreeTCABRRef/tcabr_ref_%s* daqref@tcabrcl.if.usp.br:/TCABRdata/MDSplusTreeTCABRRef/' % (shot))
             print "MDSplus tree transfered to SAUSAGE"
         except:
             print "It's was not possible to transfer MDSplus tree to SAUSAGE"
