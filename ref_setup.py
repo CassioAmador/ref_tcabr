@@ -17,7 +17,7 @@ import ref_acq
 import MDSTree
 import SimpleConfigParser
 
-ref_folder='/home/GRS/TCABR'
+ref_folder=getcwd()
 
 #Import the configuration parameters from "oper_config.ini"
 #They are called inside each class, at the beginning
@@ -470,8 +470,6 @@ class Refsetup:
                 self.HTO_prog.close()
             if self.func_gen==1:
                 self.agilent.turn_off()
-            except:
-                pass
 
     def about_gui(self):
         Pmw.aboutversion('0.95\n Mar 16 2014')
