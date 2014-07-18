@@ -311,7 +311,7 @@ class Refsetup:
             nsamples=4096
             self.dur=self.value('time_dur')
         nsamples=self.dur*1000*self.value('rate')
-        commandline='%s/ref_acq ack nsamples %d file bindata channel %d pll %s' % (ref_folder,nsamples,self.nchannels,pll)
+        commandline='%s/bin/ref_acq ack nsamples %d file bindata channel %d pll %s' % (ref_folder,nsamples,self.nchannels,pll)
         self.st.appendtext('\n\nDensity probing:')
         if self.mode=='sf':
             self.st.appendtext('\n K: %g - %g (10^13)\n Ka: %g - %g (10^13)\n\n' % (f2ne(self.f_start*2),f2ne(self.f_end*2),f2ne(self.f_start*3),f2ne(self.f_end*3)))
