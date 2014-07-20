@@ -80,8 +80,11 @@ class Refsetup:
         self.tipo=tipo
         self.oper=0
         if not path.exists("/dev/pcie0"):
-            system("sudo /home/GRS/driver_ATCA/driver/mknod.sh")
-            system("sleep 1")
+            try:
+                system("sudo /home/GRS/driver_ATCA/driver/mknod.sh")
+                system("sleep 1")
+            except:
+                Pmw.displayerror('Não foi possível carregar os drivers!')                
         if self.tty==1:
             self.HTO_prog=ttyS0comm.HTO_prog(self.tty_read)
         if self.func_gen==1:
