@@ -17,7 +17,7 @@ import ref_acq
 import MDSTree
 import SimpleConfigParser
 
-ref_folder=getcwd()
+ref_folder="/home/GRS/TCABR"
 
 #Import the configuration parameters from "oper_config.ini"
 #They are called inside each class, at the beginning
