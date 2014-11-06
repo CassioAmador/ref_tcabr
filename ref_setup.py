@@ -64,6 +64,49 @@ class mdstreeTask(threading.Thread):
         #It calls the following parameters: tipo,shot,value,mode,f_start,freqs,time_step,f_end,sweep,interv_sweep
         MDSTree.populate_MDSTree(self.father_class)
 
+class TCPIPserverTask(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.setDaemon(True)
+        self.start()
+    def run(self):
+        self.running = True
+        self.hostname = 'firehose.if.usp.br'
+        self.port = 16000
+        self.connection = None
+        self.client_address = None
+        self.shot = 0
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind((self.hostname, self.port))
+        self.socket.listen(1)
+        while self.running:
+            try:
+                self.socket.settimeout(10)
+                self.connection, self.client_address = self.socket.accept()
+                print('TCP/IP connection from %s' % self.client_address[0])
+                data_length_string = self.connection.recv(4)
+                if len(data_length_string) == 4:
+                    data_length = int(data_length_string.encode('hex'), 16)
+                    data = self.connection.recv(data_length)
+                    print("message: %s" % (data)) 
+                    message = data[0:data.find(';')]
+                    if message == "rearm":
+                        self.shot = int(data[6:])
+            except socket.timeout:
+                pass            
+            finally:
+                if self.connection != None:
+                    self.connection.close()
+                    self.connection = None
+    def stop(self):
+        self.running = False
+        if self.connection != None:
+            self.connection.close()
+        socket.socket(socket.AF_INET, 
+                      socket.SOCK_STREAM).connect((self.hostname, self.port))
+        self.socket.close()
+
 class Refsetup:
     def __init__(self,root,database,tipo='data'):
         self.tty=int(cp.getoption('tty'))
@@ -91,6 +134,7 @@ class Refsetup:
             self.agilent=agilentcomm.Agilent_prog()
             if not self.agilent.check:
                 self.func_gen=0
+        self.server = TCPIPserverTask()
         self.choose()
 
     def choose(self):
@@ -181,7 +225,7 @@ class Refsetup:
                             'Freq Start (8.2-13.4 GHz):',
                             'Freq End (8.2-13.4 GHz):',
                             'Angle (grad):','Start Time (ms)\n(0=Ôhmico):']
-        self.entries_default=['50','7','8.2','13.4','5','0']
+        self.entries_default=['8','7','8.2','13.4','5','0']
         self.keys_entries=['sweep','interv_sweep',
                             'freq_start','freq_end',
                             'angle','start_time']
@@ -278,7 +322,14 @@ class Refsetup:
 
     def findshot(self):
         if self.tipo=='data':
-            self.shot=ls.read_shot()+1
+            shot_number = ls.read_shot()+1
+            try:
+                if self.server.shot > shot_number:
+                    self.shot = self.server.shot
+                else:
+                    self.shot = shot_number
+            except:     
+                self.shot=shot_number
         else:
             self.shot=ls.last_shot(self.tipo)+1
 
@@ -304,6 +355,7 @@ class Refsetup:
                 self.HTO_prog.hf_prog(self.freqs,self.value('restart_table'))
             self.nchannels=15
         pll=self.plls[int(self.value('rate'))]
+        softtrg=""
         #SELF.DUR is duration in ms
         if self.tipo=="data":
             self.dur=170
@@ -313,8 +365,9 @@ class Refsetup:
         elif self.tipo=='mirror':
             nsamples=4096
             self.dur=self.value('time_dur')
+            softtrg="softtrg "
         nsamples=self.dur*1000*self.value('rate')
-        commandline='%s/bin/ref_acq ack nsamples %d file bindata channel %d pll %s' % (ref_folder,nsamples,self.nchannels,pll)
+        commandline='%s/ref_acq ack %snsamples %d file bindata channel %d pll %s' % (ref_folder,softtrg,nsamples,self.nchannels,pll)
         self.st.appendtext('\n\nDensity probing:')
         if self.mode=='sf':
             self.st.appendtext('\n K: %g - %g (10^13)\n Ka: %g - %g (10^13)\n\n' % (f2ne(self.f_start*2),f2ne(self.f_end*2),f2ne(self.f_start*3),f2ne(self.f_end*3)))
@@ -339,6 +392,8 @@ class Refsetup:
         
     def savesetup(self):
         self.findshot()
+        if self.tipo=='data':
+            mdstreeTask(self)
         self.st.appendtext('Shot number: %s' % self.shot)
         connection=sqlite3.connect(self.database)
         cursor=connection.cursor()
@@ -376,7 +431,6 @@ class Refsetup:
             cursor.execute('INSERT INTO hf VALUES (:date, :shot, :freq_table, :time_step, :restart_table, :angle, :rate, :start_time)', ndata)
         connection.commit()
         connection.close()
-        mdstreeTask(self)
         self.create_info_file(data)
         ref_acq.pos_acq(self.tipo)
         self.st.appendtext('\nShot %s done!\n\n' % self.shot)
@@ -473,6 +527,10 @@ class Refsetup:
                 self.HTO_prog.close()
             if self.func_gen==1:
                 self.agilent.turn_off()
+            try:
+                self.server.stop()
+            except:
+                pass
 
     def about_gui(self):
         Pmw.aboutversion('0.95\n Mar 16 2014')
@@ -505,6 +563,14 @@ def f2ne(f):
     return ne
 
 if __name__=='__main__':
+    # kill others instance of ref_setup.py
+    lista = popen('ps -eo pid,command | grep "ref_setup.py" | grep -v grep | awk \'{print $1}\'')
+    lista =  map(int, lista.readlines())
+    current_id = getpid()
+    for proc_id in lista:
+        if proc_id != current_id:
+            popen('kill -9 %d' % proc_id )
+    # start script
     database='%s/ref.db' % ref_folder
     tipo='data'
     if len(argv)>=2:
